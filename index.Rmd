@@ -45,13 +45,13 @@ shp.AV.bb <- shp.AV %>%
   st_bbox() %>%
   st_as_sfc()
 
-rgb.S2A <- c(rast('data/s2/S2A/T29TNF_20260222T113001_B02_10m.jp2'),
-             rast('data/s2/S2A/T29TNF_20260222T113001_B03_10m.jp2'),
-             rast('data/s2/S2A/T29TNF_20260222T113001_B04_10m.jp2')) %>%
+rgb.S2A <- c(rast('data/s2/S2A/T29TNF_20260222T113001_B02_10m.tif'),
+             rast('data/s2/S2A/T29TNF_20260222T113001_B03_10m.tif'),
+             rast('data/s2/S2A/T29TNF_20260222T113001_B04_10m.tif')) %>%
   crop(shp.AV.bb) 
-rgb.S2B <- c(rast('data/s2/S2B/T29TNF_20260222T112109_B02_10m.jp2'),
-             rast('data/s2/S2B/T29TNF_20260222T112109_B03_10m.jp2'),
-             rast('data/s2/S2B/T29TNF_20260222T112109_B04_10m.jp2')) %>%
+rgb.S2B <- c(rast('data/s2/S2B/T29TNF_20260222T112109_B02_10m.tif'),
+             rast('data/s2/S2B/T29TNF_20260222T112109_B03_10m.tif'),
+             rast('data/s2/S2B/T29TNF_20260222T112109_B04_10m.tif')) %>%
   crop(shp.AV.bb)
 ```
 

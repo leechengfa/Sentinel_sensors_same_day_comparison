@@ -1,0 +1,295 @@
+---
+title: "Comparison of same-day Sentinel-2 satellite images from different platforms"
+author: "Lee, Chengfa Benjamin"
+date: "`r Sys.Date()`"
+output: html_document
+bibliography: references.bib 
+editor_options:
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(magrittr)
+library(dplyr)
+library(terra)
+library(tidyterra)
+library(sf)
+library(ggplot2)
+library(leaflet)
+library(ggpubr)
+library(patchwork)
+```
+
+This report explores the differences in classification output of the [ICE CREAMS model](https://github.com/BedeFfinian/ICE_CREAMS) on two images taken on the same day by Sentinel-2. 
+- 22 Feb 2026: Sentinel-2A and Sentinel-2B passed over Ria de Aveiro within 9 minutes of each other.
+
+All analyses were performed in R version 4.5.2 [@Rversion].
+All work belong to the [REWRITE project](https://rewriteproject.eu/).
+
+This investigation is a work in progress. Information may change.
+
+# Satellite images
+
+The overlap in coverage is noted at Ria de Aveiro. with only about 9 minutes of difference and no clouds, the light conditions are assumed to be the same.
+
+```{r aveiro_map_preprocess}
+#| echo: false
+#| error: false
+#| message: false
+#| warning: false
+
+shp.AV <- read_sf('data/shp/Aveiro_intertidal_GEE.shp') 
+shp.AV.bb <- shp.AV %>%
+  st_bbox() %>%
+  st_as_sfc()
+
+rgb.S2A <- c(rast('data/s2/S2A/T29TNF_20260222T113001_B02_10m.jp2'),
+             rast('data/s2/S2A/T29TNF_20260222T113001_B03_10m.jp2'),
+             rast('data/s2/S2A/T29TNF_20260222T113001_B04_10m.jp2')) %>%
+  crop(shp.AV.bb) 
+rgb.S2B <- c(rast('data/s2/S2B/T29TNF_20260222T112109_B02_10m.jp2'),
+             rast('data/s2/S2B/T29TNF_20260222T112109_B03_10m.jp2'),
+             rast('data/s2/S2B/T29TNF_20260222T112109_B04_10m.jp2')) %>%
+  crop(shp.AV.bb)
+```
+
+```{r aveiro_map, fig.cap = "Images taken from the different Sentinel-2 platforms over Ria de Aveiro on the same day."}
+#| echo: false
+#| error: false
+#| message: false
+#| warning: false
+#| fig.width: 10
+#| fig.height: 7.14
+
+p_S2A <- ggplot() +
+  geom_spatraster_rgb(data = rgb.S2A, r = 3, g = 2, b = 1, max_col_value = 5000) +
+  ggtitle('Sentinel-2A')
+p_S2B <- ggplot() +
+  geom_spatraster_rgb(data = rgb.S2B, r = 3, g = 2, b = 1, max_col_value = 5000) +
+  ggtitle('Sentinel-2B')
+
+p_S2A + p_S2B
+```
+
+# ICE CREAMS model
+
+Given such similar reflectance, one would assume that the ICE CREAMS classification would be highly similar. However, there are some differences.
+
+```{r icecreams_preprocessing}
+#| echo: false
+#| error: false
+#| message: false
+#| warning: false
+
+mat <- matrix(c(
+  -0.5,  0.5,  NA,
+   0.5,  1.5,  NA,
+   1.5,  2.5,  NA,
+   2.5,  3.5,  NA,
+   3.5,  4.5,   1,
+   4.5,  5.5,  NA,
+   5.5,  6.5,  NA,
+   6.5,  7.5,  NA,
+   7.5,  8.5,  NA,
+   8.5,  9.5,  NA
+), ncol = 3, byrow = TRUE)
+
+map.class.S2A <- rast('data/ice_creams/S2A_MSIL2A_20260222T113001_N0512_R037_T29TNF_20260222T155510_Pred_BFRD_V1_3.tif')
+  map.class.S2A$Out_Class <- map.class.S2A$Out_Class %>%
+    classify(mat, include.lowest = TRUE)
+map.class.S2B <- rast('data/ice_creams/S2B_MSIL2A_20260222T112109_N0512_R037_T29TNF_20260222T165721_Pred_BFRD_V1_3.tif')
+  map.class.S2B$Out_Class <- map.class.S2B$Out_Class %>%
+    classify(mat, include.lowest = TRUE)
+
+map.spc.diff <- abs(map.class.S2A$Seagrass_Cover - map.class.S2B$Seagrass_Cover) %>%
+  classify(matrix(c(-0.001, 0.001, NA), ncol = 3, byrow = TRUE),
+           include.lowest = TRUE)
+```
+
+```{r icecreams_map, fig.cap = "ICE CREAMS classification over the two images and the absolute difference in SPC output."}
+#| echo: false
+#| error: false
+#| message: false
+#| warning: false
+#| fig.width: 12
+#| fig.height: 8
+
+p_S2A_icecreams <- ggplot() +
+  geom_spatraster_rgb(data = rgb.S2A, r = 3, g = 2, b = 1, max_col_value = 5000) +
+  geom_spatraster(data = map.class.S2A, aes(fill = Out_Class), na.rm = TRUE)  +
+  scale_fill_viridis_c('Class', breaks = 1, labels = "Seagrass", na.value = "transparent") +
+  ggtitle('Sentinel-2A')
+p_S2B_icecreams <- ggplot() +
+  geom_spatraster_rgb(data = rgb.S2B, r = 3, g = 2, b = 1, max_col_value = 5000) +
+  geom_spatraster(data = map.class.S2B, aes(fill = Out_Class), na.rm = TRUE)  +
+  scale_fill_viridis_c('Class', breaks = 1, labels = "Seagrass", na.value = "transparent") +
+  ggtitle('Sentinel-2B')
+
+p_spc_icecreams <- ggplot() +
+  geom_spatraster_rgb(data = rgb.S2B, r = 3, g = 2, b = 1, max_col_value = 5000) +
+  geom_spatraster(data = map.spc.diff, aes(fill = Seagrass_Cover), na.rm = TRUE)  +
+  scale_fill_viridis_c('Abs % Diff', na.value = "transparent") +
+  ggtitle('Absolute SPC difference')
+
+p_S2A_icecreams + p_S2B_icecreams + p_spc_icecreams
+```
+
+# Comparing differences
+
+By using the two ICE CREAMS class maps, the areas where the class maps agree and disagree with each other can be identified. Then, the spectral comparisons between the images based on these areas can be compared. As there are too many pixels in agreement, only pixels of both class maps that agree on the "seagrass" label are considered for the agreement. For the disagreement, so long as one of the class maps labels the pixel as "seagrass", these pixels were considered. 
+
+```{r gee_preprocessing}
+#| echo: false
+#| error: false
+#| message: false
+#| warning: false
+#| fig.cap: ICE CREAMS seagrass classification over the two images and the absolute difference in SPC output.
+
+csv <- {
+  diff <- read.csv('data/gee/Aveiro_same_day_sensor_comparison_diff_2026-02-22.csv') %>%
+    select(-.geo)
+    diff$agree <- 'diff'
+  
+  same <- csv <- read.csv('data/gee/Aveiro_same_day_sensor_comparison_same_2026-02-22.csv') %>%
+    select(-.geo)
+    same$agree <- 'same'
+  
+  rbind(diff,same)
+}
+
+wavelength <- data.frame('band' = c('B1','B2','B3','B4','B5','B6','B7','B8','B8A','B9','B11','B12'),
+                         'wavelength' = c(443, 496, 560, 664, 703, 740, 782, 835, 864, 945, 1613, 2202))
+
+csv.sensor <- csv %>%
+  select(!contains('dist')) %>%
+  pivot_longer(cols = !c(system.index, agree),names_sep = "_", names_to = c('band', 'sensor')) %>%
+  filter(band !='WVP') %>%
+  left_join(wavelength, by = join_by(band))
+  csv.sensor$band <- factor(csv.sensor$band, levels = c('B1','B2','B3','B4','B5','B6','B7','B8','B8A','B9','B11','B12'))
+  
+csv.dist <- csv %>%
+  select(c(system.index, contains('dist'), agree)) %>%
+  pivot_longer(cols = !c(system.index, agree),names_sep = "_", names_to = c('method', 'band')) %>%
+  group_by(system.index, agree)
+
+## grp is for grouping and then subsampling some of the pixels for a closer look 
+## not practical to print all the results (too many pixels)
+csv.sensor$grp <- csv.sensor$system.index %>%
+  "/"(21) %>%
+  floor()
+
+csv.sensor <- csv.sensor %>%
+  group_by(system.index, agree, band) %>%
+  mutate(sensor.diff = diff(value), id = paste(system.index, sensor, agree, sep = "_")) %>% ## S2B - S2A
+  ungroup()
+
+## preprocessing for the matchup plot
+csv.sensor.wide <- csv.sensor %>%
+  group_by(system.index, agree, band) %>%
+  select(-id) %>%
+  pivot_wider(names_from = sensor, values_from = value) %>%
+  ungroup()
+```
+
+Indeed, while the pixels that disagree show a larger range of spectral differences, by and large, their range of values and interquartile ranges are still very similar (no statistical tests performed).
+
+```{r gee_boxplot, fig.cap = "Boxplot and violin plot showing the difference in band values between the two images for the pixels in agreement and disagreement of the seagrass classification."}
+#| echo: false
+#| error: false
+#| message: false
+#| warning: false
+#| fig.width: 10
+#| fig.height: 7.14
+
+p_box <- csv.sensor %>%
+  filter(sensor == 'S2A') %>% # only one needed, the other is a dupe
+  filter(wavelength < 1000) %>%
+  ggplot(aes(x = band, y = sensor.diff/10000, colour = agree)) +
+    geom_violin(aes(fill = agree)) +
+    geom_boxplot() +
+    scale_colour_viridis_d('Agreement', option = "H") +
+    scale_fill_viridis_d('Agreement', option = "H", guide = FALSE) +
+    xlab('Band') + ylab('Difference in band values')
+
+p_box
+```
+
+The match ups suggest that the pixel values of these two platforms are highly similar. 
+
+```{r gee_matchup, fig.cap = "Match up of the band pixels values between the two platforms for both pixels which class maps agree and disagree."}
+#| echo: false
+#| error: false
+#| message: false
+#| warning: false
+#| fig.width: 12
+#| fig.height: 8
+
+p_matchup <- ggplot(csv.sensor.wide, aes(x = S2A, y = S2B, colour = agree)) +
+  geom_smooth() + 
+  geom_point() +
+  scale_colour_viridis_d('Agreement', option = 'H') +
+  stat_regline_equation(label.x.npc = 'left', label.y.npc = 'top', decreasing = TRUE, aes(label = paste(..eq.label.., ..adj.rr.label.., sep = "~~~~"))) +
+  facet_wrap(. ~ agree + band, ncol = 6)
+  
+p_matchup
+```
+
+Finally, a subset of pixel spectral values are inspected for their spectral shapes.Again, it is difficult to notice any substantial differences that might cause the ICE CREAMS model to assign different labels to the same pixel of both platforms. 
+
+```{r gee_spectra1}
+#| echo: false
+#| error: false
+#| message: false
+#| warning: false
+#| fig.width: 12
+#| fig.height: 12
+
+p_shape1 <- csv.sensor %>%
+    filter(grp == 10) %>%
+    filter(wavelength < 1000) %>%
+    ggplot(aes(x = wavelength, y = value, group = id, colour = sensor)) +
+    geom_line(linewidth = 1) +
+    facet_wrap(agree + system.index ~ ., scales = 'fixed')
+
+p_shape1
+```
+
+```{r gee_spectra2}
+#| echo: false
+#| error: false
+#| message: false
+#| warning: false
+#| fig.width: 12
+#| fig.height: 12
+
+p_shape2 <- csv.sensor %>%
+    filter(grp == 100) %>%
+    filter(wavelength < 1000) %>%
+    ggplot(aes(x = wavelength, y = value, group = id, colour = sensor)) +
+    geom_line(linewidth = 1) +
+    facet_wrap(agree + system.index ~ ., scales = 'fixed')
+
+p_shape2
+```
+
+```{r gee_spectra3, fig.cap = "Spectra shapes of both platforms for select pixels. 'same' and 'diff' denotes the ICE CREAMS classification pixel agreement. The number below the agreement represents the pixel of interest."}
+#| echo: false
+#| error: false
+#| message: false
+#| warning: false
+#| fig.width: 12
+#| fig.height: 12
+
+p_shape3 <- csv.sensor %>%
+    filter(grp == 1000) %>%
+    filter(wavelength < 1000) %>%
+    ggplot(aes(x = wavelength, y = value, group = id, colour = sensor)) +
+    geom_line(linewidth = 1) +
+    facet_wrap(agree + system.index ~ ., scales = 'fixed')
+
+p_shape3
+```
+
+# References

@@ -164,14 +164,14 @@ wavelength <- data.frame('band' = c('B1','B2','B3','B4','B5','B6','B7','B8','B8A
 
 csv.sensor <- csv %>%
   select(!contains('dist')) %>%
-  pivot_longer(cols = !c(system.index, agree),names_sep = "_", names_to = c('band', 'sensor')) %>%
+  pivot_longer(cols = !c(system.index, agree, contains('class'), contains('spc')),names_sep = "_", names_to = c('band', 'sensor')) %>%
   filter(band !='WVP') %>%
-  left_join(wavelength, by = join_by(band))
+  left_join(wavelength, by = join_by(band)) 
   csv.sensor$band <- factor(csv.sensor$band, levels = c('B1','B2','B3','B4','B5','B6','B7','B8','B8A','B9','B11','B12'))
   
 csv.dist <- csv %>%
-  select(c(system.index, contains('dist'), agree)) %>%
-  pivot_longer(cols = !c(system.index, agree),names_sep = "_", names_to = c('method', 'band')) %>%
+  select(c(system.index, contains('dist'), agree, contains('class'), contains('spc'))) %>%
+  pivot_longer(cols = !c(system.index, agree, contains('class'), contains('spc')),names_sep = "_", names_to = c('method', 'band')) %>%
   group_by(system.index, agree)
 
 ## grp is for grouping and then subsampling some of the pixels for a closer look 
@@ -193,7 +193,153 @@ csv.sensor.wide <- csv.sensor %>%
   ungroup()
 ```
 
+## Match ups
+
+```{r gee_class_matchup_preprocess}
+#| echo: false
+#| error: false
+#| message: false
+#| warning: false
+
+table.class.matchup <- csv.sensor %>%
+  filter(sensor == 'S2B') %>% ## remove duplicate that resulted from pivot_longer()
+  select(class_S2A, class_S2B) %>%
+  table() 
+
+# add in missing classes (rows/columns)
+# be very careful of matrix object type, else cbind.table might convert table into long format instead
+if(sum(1:9 %in% colnames((table.class.matchup))) != 9){
+  missingcol <- which(!1:9 %in% colnames((table.class.matchup)))
+  replacementcol <- matrix(rep(0, nrow(table.class.matchup) * length(missingcol)), ncol = length(missingcol))
+    colnames(replacementcol) <- missingcol
+    row.names(replacementcol) <- row.names(table.class.matchup)
+  
+  table.class.matchup <- cbind(table.class.matchup, replacementcol) 
+  
+  table.class.matchup <- table.class.matchup[, order(colnames(table.class.matchup))]
+}
+if(sum(1:9 %in% row.names((table.class.matchup))) != 9){
+  missingrow <- which(!1:9 %in% row.names((table.class.matchup)))
+  replacementrow <- matrix(rep(0, ncol(table.class.matchup) * length(missingrow)), ncol = ncol(table.class.matchup))
+    row.names(replacementrow) <- missingrow
+    colnames(replacementrow) <- colnames(table.class.matchup)
+  
+  table.class.matchup <- rbind(table.class.matchup, replacementrow) 
+  
+  table.class.matchup <- table.class.matchup[order(row.names(table.class.matchup)),]
+}
+
+# rename rows/columns
+labels.icecreams <- c("Bare Sand","Bare Sediment","Chlorophyta","Magnoliopsida","Microphytobenthos","Phaeophyceae","Rhodophyta","Water","Xanthophyceae")
+  row.names(table.class.matchup) <- paste('S2A:', labels.icecreams)
+  colnames(table.class.matchup) <- paste('S2B:', labels.icecreams)
+```
+
+`r (table.class.matchup['S2A: Magnoliopsida','S2B: Magnoliopsida']/sum(table.class.matchup['S2A: Magnoliopsida',]) * 100) %>% format(digits = 3, nsmall = 1)`% and `r (table.class.matchup['S2A: Magnoliopsida','S2B: Magnoliopsida']/sum(table.class.matchup[,'S2B: Magnoliopsida']) * 100) %>% format(digits = 3, nsmall = 1)`% of the seagrass labels were in agreement for Sentinel-2A and 2B, respectively. Of the pixel labelled as seagrass in the Sentinel-2A image, `r (table.class.matchup['S2A: Magnoliopsida','S2B: Bare Sediment']/sum(table.class.matchup['S2A: Magnoliopsida',]) * 100) %>% format(digits = 3, nsmall = 1)`% are labelled as bare sediment and `r (table.class.matchup['S2A: Magnoliopsida','S2B: Rhodophyta']/sum(table.class.matchup['S2A: Magnoliopsida',]) * 100) %>% format(digits = 3, nsmall = 1)`% as Rhodophyta in the Sentinel-2B image. As for the Sentinel-2B image, `r (table.class.matchup['S2A: Bare Sediment','S2B: Magnoliopsida']/sum(table.class.matchup[,'S2B: Magnoliopsida']) * 100) %>% format(digits = 3, nsmall = 1)`% of its seagrass labels were labelled as bare sediment and `r (table.class.matchup['S2A: Bare Sediment','S2B: Magnoliopsida']/sum(table.class.matchup[,'S2B: Magnoliopsida']) * 100) %>% format(digits = 3, nsmall = 1)`% as Rhodophyta in the Sentinel-S2A image. While it seems intuitive to suggest that Sentinel-2A is overestimating, it is also possible that Sentinel-2B might be underestimating.
+
+```{r gee_class_matchup_table}
+#| echo: false
+#| error: false
+#| message: false
+#| warning: false
+ 
+knitr::kable(table.class.matchup,
+             format = 'pipe', 
+             align = 'c',
+             caption = 'ICE CREAMS classification map match up between Sentinel-2A and Sentinel-2B "seagrass" labels. Any pixels which were not labelled as "seagrass" in either image were removed from this exploration.'
+             )
+```
+
+From their class probabilities, it can be seen that although the classification map of Sentinel-2A had a higher disagreement in label compared to its counterpart based on Sentinel-2B, it had a seemingly normally distributed class probability for the non-seagrass labels. For both its seagrass pixels in agreement and disagreement, the class probability has a left skew. Although using a class-probability threshold to delineate seagrass may be tempting, it can still lead to overestimation. For example, nearly 20,000 seagrass pixels from Sentinel-2A that disagree with Sentinel-2B have a class probability of 100%, compared with just over 20,000 agreeing pixels at 100% probability. If Sentinel-2B did not underestimate, relying on probability alone could therefore inflate seagrass extent. 
+
+Correspondingly, many pixels with the Bare Sediment and Rhodophyta classifications for the Sentinel-2B image had a higher class probability, in spite of having a seagrass label from Sentinel-2A instead. There was more disagreement (or perhaps confusion?) between seagrass and bare sediments, followed by seagrass and Rhodophyta.
+
+```{r gee_traits}
+#| echo: false
+#| error: false
+#| message: false
+#| warning: false
+#| fig.width: 14
+#| fig.height: 8
+#| fig.cap: ICE CREAMS classification probability based on the classification labels of each image. Should there be a disagreement, then the label arising from the other image is the opposite (i.e. seagrass/Magnoliopsida vs non-seagrass). The red dotted line denotes the probability at 0.5. From the count, it can be seen that the Sentinel-2A image has classified more pixels as seagrass than the Sentinel-2B image.
+
+csv.sensor$class_S2A <- csv.sensor$class_S2A %>%
+  factor(levels = c(1:9), labels = labels.icecreams)
+csv.sensor$class_S2B <- csv.sensor$class_S2B %>%
+  factor(levels = c(1:9), labels = labels.icecreams)
+
+p_hist_agree_classProbS2A <- csv.sensor %>%
+  filter(sensor == 'S2A') %>% # remove duplicate
+  ggplot(aes(x = classProb_S2A)) +
+    geom_vline(xintercept = 0.5, colour = 'red', linetype = 2) +
+    geom_histogram() +
+    scale_x_continuous(limits = c(0,1), breaks = c(0, 0.25, 0.5, 0.75, 1)) + 
+    xlab('Class Probability: Sentinel-2A') + ylab('Count') +
+    facet_grid(agree ~ class_S2A, labeller = labeller(agree = c(diff = 'Disagreement on\nseagrass label', same = 'Agreement on\nseagrass label')))
+
+p_hist_agree_classProbS2B <- csv.sensor %>%
+  filter(sensor == 'S2B') %>% # remove duplicate
+  ggplot(aes(x = classProb_S2B)) +
+    geom_vline(xintercept = 0.5, colour = 'red', linetype = 2) +
+    geom_histogram() +
+    scale_x_continuous(limits = c(0,1), breaks = c(0, 0.25, 0.5, 0.75, 1)) +
+    xlab('Class Probability: Sentinel-2B') + ylab('Count') +
+    facet_grid(agree ~ class_S2B, labeller = labeller(agree = c(diff = 'Disagreement on\nseagrass label', same = 'Agreement on\nseagrass label')))
+
+p_hist_agree_classProbS2A / p_hist_agree_classProbS2B
+```
+
+## Seagrass percent cover
+
+When comparing the seagrass percent cover, based on the more positive kurtosis seen in the distribution for the Sentinel-2A classification map, it seems that more seagrass pixels with a lower seagrass cover (< ~ 35%) might have been labelled differently in the other image. This kurtosis pattern is not present for the distribution of pixels in disagreement from the Sentinel-2B classification map.
+
+```{r gee_spc}
+#| echo: false
+#| error: false
+#| message: false
+#| warning: false
+#| fig.cap: ICE CREAMS seagrass percent cover over seagrass-labelled pixels for both images. While both images may disagree in labels for some of the pixels, only pixels labelled as seagrass by the image of interest is represented in each graph.
+
+p_hist_agree_spcS2A <- csv.sensor %>%
+  filter(sensor == 'S2A') %>% # remove duplicate
+  filter(class_S2A == "Magnoliopsida") %>%
+  filter(spc_S2A > 0) %>%
+  ggplot(aes(x = spc_S2A)) +
+    # geom_vline(xintercept = 0.5, colour = 'red', linetype = 2) +
+    geom_histogram() +
+    scale_x_continuous(limits = c(0,100), breaks = c(0, 25, 50, 75, 100)) +
+    xlab('Seagrass Percent Cover: Sentinel-2A') + ylab('Count') +
+    facet_grid(agree ~ ., labeller = labeller(agree = c(diff = 'Disagreement on\nseagrass label', same = 'Agreement on\nseagrass label')))
+
+p_hist_agree_spcS2B <- csv.sensor %>%
+  filter(sensor == 'S2B') %>% # remove duplicate
+  filter(class_S2B == "Magnoliopsida") %>%
+  filter(spc_S2B > 0) %>%
+  ggplot(aes(x = spc_S2B)) +
+    # geom_vline(xintercept = 0.5, colour = 'red', linetype = 2) +
+    geom_histogram() +
+    scale_x_continuous(limits = c(0,100), breaks = c(0, 25, 50, 75, 100)) +
+    xlab('Seagrass Percent Cover: Sentinel-2B') + ylab('Count') +
+    facet_grid(agree ~ ., labeller = labeller(agree = c(diff = 'Disagreement on\nseagrass label', same = 'Agreement on\nseagrass label')))
+
+p_hist_agree <- p_hist_agree_spcS2A + p_hist_agree_spcS2B + plot_layout(axes = 'collect')
+
+# p_ranges_x <- c(ggplot_build(p_hist_agree[[1]])$layout$panel_scales_x[[1]]$range$range,
+#   ggplot_build(p_hist_agree[[2]])$layout$panel_scales_x[[1]]$range$range)
+
+p_ranges_y <- c(ggplot_build(p_hist_agree[[1]])$layout$panel_scales_y[[1]]$range$range,
+                ggplot_build(p_hist_agree[[2]])$layout$panel_scales_y[[1]]$range$range)
+
+p_hist_agree & 
+  # xlim(min(p_ranges_x), max(p_ranges_x)) & 
+  ylim(min(p_ranges_y), max(p_ranges_y))
+```
+
+## Spectral difference
+
 Indeed, while the pixels that disagree show a larger range of spectral differences, by and large, their range of values and interquartile ranges are still very similar (no statistical tests performed).
+
+Most importantly, there seems to be a substantial difference in B2 values between both images. For this difference plot, there seems to be a longer tail for both the boxplot and violin plots for pixels in disagreement versus pixels in agreement, as well as a possible red shift (no statistical tests performed).
 
 ```{r gee_boxplot, fig.cap = "Boxplot and violin plot showing the difference in band values between the two images for the pixels in agreement and disagreement of the seagrass classification."}
 #| echo: false
@@ -216,7 +362,7 @@ p_box <- csv.sensor %>%
 p_box
 ```
 
-The match ups suggest that the pixel values of these two platforms are highly similar. 
+The match ups suggest that the pixel values of these two platforms are highly similar, with many of the matchups having a "y = x" relationship. B1 and B2 had a slightly off-equal relationship with a gradient of 0.97 and 0.95/0.96, respectively. Interestingly, while the pixel labels in disagreement have a gradient of 1 for B3, the pixel labels in agreement have a gradient of 0.99 for B3 instead.
 
 ```{r gee_matchup, fig.cap = "Match up of the band pixels values between the two platforms for both pixels which class maps agree and disagree."}
 #| echo: false
@@ -226,17 +372,18 @@ The match ups suggest that the pixel values of these two platforms are highly si
 #| fig.width: 12
 #| fig.height: 8
 
-p_matchup <- ggplot(csv.sensor.wide, aes(x = S2A, y = S2B, colour = agree)) +
-  geom_smooth() + 
-  geom_point() +
+p_matchup <- ggplot(csv.sensor.wide, aes(x = S2A, y = S2B)) +
+  geom_smooth(aes(colour = agree)) + 
+  geom_point(aes(colour = agree)) +
   scale_colour_viridis_d('Agreement', option = 'H') +
-  stat_regline_equation(label.x.npc = 'left', label.y.npc = 'top', decreasing = TRUE, aes(label = paste(..eq.label.., ..adj.rr.label.., sep = "~~~~"))) +
+  stat_cor(label.x.npc = 'left', label.y.npc = 'top') +
+  stat_regline_equation(label.x.npc = 'centre', label.y.npc = 'bottom', decreasing = TRUE) +
   facet_wrap(. ~ agree + band, ncol = 6)
   
 p_matchup
 ```
 
-Finally, a subset of pixel spectral values are inspected for their spectral shapes.Again, it is difficult to notice any substantial differences that might cause the ICE CREAMS model to assign different labels to the same pixel of both platforms. 
+Finally, a subset of pixel spectral values are inspected for their spectral shapes. While some of the pixels in disagreement have a very similar spectral shape, there is a noticeable difference in B2 values across all pixels, in agreement or otherwise. This supports the earlier box and violin plots.
 
 ```{r gee_spectra1}
 #| echo: false

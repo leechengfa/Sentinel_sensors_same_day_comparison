@@ -1,0 +1,238 @@
+// Same day sensor image comparison
+// Lee Chengfa Benjamin
+// 26 March 2026
+
+// ---------------------
+// Notes
+// ---------------------
+
+// 2026.03.26: Creation of script
+
+// ---------------------
+// Imports
+// ---------------------
+
+var s2_coll = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED"),
+    lagoon = 
+    /* color: #d63000 */
+    /* shown: false */
+    ee.Geometry.Polygon(
+        [[[-8.765353319313254, 40.551383153650306],
+          [-8.754239302187361, 40.560579051230434],
+          [-8.743805440758171, 40.58659572839052],
+          [-8.735138376433582, 40.59982620562387],
+          [-8.731961993557938, 40.61462042605778],
+          [-8.726312191451902, 40.637061998393136],
+          [-8.705549011649856, 40.65090428180417],
+          [-8.688400942555958, 40.62934573325953],
+          [-8.686725444116467, 40.6140987924607],
+          [-8.692650478078118, 40.59220130914033],
+          [-8.6787458142052, 40.54577921349965],
+          [-8.666729202815448, 40.55360548868353],
+          [-8.681148878225004, 40.60002205070919],
+          [-8.64939137351896, 40.63351057343666],
+          [-8.637031751990465, 40.66528963311324],
+          [-8.626216997239533, 40.67974147732865],
+          [-8.629392687220337, 40.68865840886537],
+          [-8.639349256592169, 40.695751992450056],
+          [-8.65798442733223, 40.69394172939429],
+          [-8.665292993146616, 40.71139144656503],
+          [-8.646262532093571, 40.71662078067904],
+          [-8.619870327197361, 40.71745031722347],
+          [-8.603128512395548, 40.730558388047484],
+          [-8.619093113742926, 40.73602168226666],
+          [-8.668360183649328, 40.73595662883337],
+          [-8.679432401375795, 40.779061788762725],
+          [-8.672023704409353, 40.78435467634035],
+          [-8.668048486277463, 40.776128942947665],
+          [-8.672114747432973, 40.76721614444145],
+          [-8.664112639518278, 40.76005030627734],
+          [-8.64913947448197, 40.76469928562565],
+          [-8.634292669920107, 40.78907147540491],
+          [-8.622440519117278, 40.81336988513486],
+          [-8.63196424965832, 40.83580469992617],
+          [-8.648954886315751, 40.84980226068365],
+          [-8.6559930403563, 40.86453859249001],
+          [-8.672215127668002, 40.82278796424199],
+          [-8.68405988400755, 40.79264364013749],
+          [-8.705860937592599, 40.75741462990566],
+          [-8.702599387878724, 40.721516433965064],
+          [-8.720623927575357, 40.70147784729689],
+          [-8.722943873007438, 40.69223490867599],
+          [-8.720498097767843, 40.679933744858964],
+          [-8.728201039150271, 40.66440882111585],
+          [-8.73641683530295, 40.65851777965082],
+          [-8.740193395547214, 40.650443368509265],
+          [-8.744141628164241, 40.64314953841649],
+          [-8.746373237841265, 40.63220729869533],
+          [-8.751179777302939, 40.62048149342358],
+          [-8.749349429066024, 40.61047734317752],
+          [-8.752611005998519, 40.59470701686544],
+          [-8.753469811819976, 40.58434302860038],
+          [-8.756559251204994, 40.578802593997146],
+          [-8.759220044675489, 40.56191630065021],
+          [-8.770549713633313, 40.551417277334316],
+          [-8.771150538781747, 40.53954683871609],
+          [-8.776557887919179, 40.52832668001347],
+          [-8.778017090410339, 40.521541462327804],
+          [-8.775871387908742, 40.51703922408358],
+          [-8.763168529713498, 40.53566535879454]]]);
+
+// ---------------------
+// User Input
+// ---------------------
+
+var start_date = '2026-02-22';
+var mgrs = '29TNF';
+
+var geom = lagoon;
+
+// sensor: choice between 'Sentinel-2A', 'Sentinel-2B', 'Sentinel-2C', 'Sentinel-2D'
+var sensor1 = 'Sentinel-2A';
+var sensor2 = 'Sentinel-2B';
+
+// Comparison with ICE CREAMS output
+var ice_creams_output = true;
+var ice_creams_asset1_name = 'projects/ee-seagrass14/assets/REWRITE/Aveiro/S2A_MSIL2A_20260222_Pred_BFRD_V1_3';
+var ice_creams_asset2_name = 'projects/ee-seagrass14/assets/REWRITE/Aveiro/S2B_MSIL2A_20260222_Pred_BFRD_V1_3';
+
+// ---------------------
+// Extract relevant image
+// ---------------------
+
+var same_images = s2_coll.filterBounds(geom)
+                         .filterDate(start_date, ee.Date(start_date).advance(1, 'day'))
+                         .filter(ee.Filter.eq('MGRS_TILE', mgrs))
+                         ;
+
+var bands = ['B1','B2','B3','B4','B5','B6','B7','B8','B8A','B9','WVP','B11','B12']; // there is no B10 (WVP seems to be the equivalent)
+
+var s2_preprocess_hardcoded = function(spacecraft_name) {
+  var output = same_images.filter(ee.Filter.eq('SPACECRAFT_NAME', spacecraft_name))
+                          .first()
+                          .select(bands)
+                          .clip(geom);
+  
+  return output;
+};
+
+// Opens option of S2C or even S2D in the future
+var img1 = s2_preprocess_hardcoded(sensor1); 
+var img2 = s2_preprocess_hardcoded(sensor2); 
+
+var get_sensor_name = function(sensor_input) {
+  var output = (sensor_input == 'Sentinel-2A') ? 'S2A' : 
+               (sensor_input == 'Sentinel-2B') ? 'S2B' :
+               (sensor_input == 'Sentinel-2C') ? 'S2C' : 
+               (sensor_input == 'Sentinel-2D') ? 'S2D' : null;
+
+  return(output);
+};
+
+var sensor1_name = get_sensor_name(sensor1);
+var sensor2_name = get_sensor_name(sensor2);
+
+Map.addLayer(img1, {bands: ['B4','B3','B2'], min: 0, max: 2000}, sensor1_name + '_RGB', true);
+Map.addLayer(img2, {bands: ['B4','B3','B2'], min: 0, max: 2000}, sensor2_name + '_RGB', false); // toggle if comparison is desired
+
+Map.centerObject(lagoon, 12);
+
+// ---------------------
+// Compare image
+// ---------------------
+
+var rainbow_palette_10 = ['#ff595e', '#ff924c', '#ffca3a', '#c5ca30', '#8ac926', '#52a675', '#1982c4', '#4267ac', '#6a4c93', '#b5a6c9'];
+
+var distance_sam = img1.spectralDistance(img2, 'sam').rename('dist_sam');
+var distance_sid = img1.spectralDistance(img2, 'sid').rename('dist_sid');
+var distance_sed = img1.spectralDistance(img2, 'sed').rename('dist_sed');
+var distance_emd = img1.spectralDistance(img2, 'emd').rename('dist_emd');
+
+Map.addLayer(distance_sam, {palette: rainbow_palette_10, min: 0, max: 1}, 'Distance: sam', true);
+Map.addLayer(distance_sid, {palette: rainbow_palette_10, min: 0, max: 1}, 'Distance: sid', true);
+Map.addLayer(distance_sed, {palette: rainbow_palette_10, min: 0, max: 100000}, 'Distance: sed', true);
+Map.addLayer(distance_emd, {palette: rainbow_palette_10, min: 0, max: 100000}, 'Distance: emd', true);
+
+// ---------------------
+// Compare with ICE CREAMS
+// ---------------------
+
+if (ice_creams_output) {
+  var ice_creams_asset1 = ee.Image(ice_creams_asset1_name);
+  var ice_creams_asset2 = ee.Image(ice_creams_asset2_name);
+  Map.addLayer(ice_creams_asset1.select(['b1']).selfMask(), {min: 1, max: 9, palette: ['grey','grey','grey','green','grey','grey','grey','grey','grey']}, 'Ice creams for ' + sensor1_name, false);
+  Map.addLayer(ice_creams_asset2.select(['b1']).selfMask(), {min: 1, max: 9, palette: ['grey','grey','grey','green','grey','grey','grey','grey','grey']}, 'Ice creams for ' + sensor2_name, false);
+  
+  var ice_creams_1 = ice_creams_asset1.select(['b1'])
+                                      .eq(4);
+  var ice_creams_2 = ice_creams_asset2.select(['b1'])
+                                      .eq(4);
+  
+  var compiled_ice_creams = ice_creams_1.add(ice_creams_2)
+                                        .selfMask()
+                                        .rename('class')
+                                        ;
+  
+  Map.addLayer(compiled_ice_creams, {palette: ['black', 'white']}, 'summed ice creams map', false);
+  
+  var diff_ice_creams = compiled_ice_creams.eq(1).selfMask();
+  var diff_ice_creams_vector = diff_ice_creams.reduceToVectors({
+    geometry: geom,
+    scale: 10,
+    geometryType: 'polygon',
+    eightConnected: false,
+    labelProperty: 'zone',
+    maxPixels: 1e13
+  });
+  Map.addLayer(diff_ice_creams_vector, {}, 'difference ice creams map', true);
+  
+  var same_ice_creams = compiled_ice_creams.eq(2).selfMask();
+  var same_ice_creams_vector = same_ice_creams.reduceToVectors({
+    geometry: geom,
+    scale: 10,
+    geometryType: 'polygon',
+    eightConnected: false,
+    labelProperty: 'zone',
+    maxPixels: 1e13
+  });
+  Map.addLayer(same_ice_creams_vector, {}, 'same ice creams map', true);
+  
+  var bands_sensor1 = bands.map(function(string) {return(string + "_" + sensor1_name)});
+  var bands_sensor2 = bands.map(function(string) {return(string + "_" + sensor2_name)});
+  
+  img1 = img1.rename(bands_sensor1);
+  img2 = img2.rename(bands_sensor2);
+  
+  var img_compiled = ice_creams_asset1.rename(['class_' + sensor1_name,'classProb_' + sensor1_name,'spc_' + sensor1_name])
+                                      .addBands(ice_creams_asset2.rename(['class_' + sensor2_name,'classProb_' + sensor2_name,'spc_' + sensor2_name]))
+                                      .addBands(distance_sam)
+                                      .addBands(distance_sid)
+                                      .addBands(distance_sed)
+                                      .addBands(distance_emd)
+                                      .addBands(img1)
+                                      .addBands(img2);
+  
+  var extracted_vector_diff = img_compiled.sample({
+    region: diff_ice_creams_vector,
+    scale: 10,
+  });
+  
+  Export.table.toDrive({
+    collection: extracted_vector_diff, 
+    description: "Same_day_sensor_comparison_diff_" + start_date, 
+    folder: 'Nantes/REWRITE', 
+    fileFormat: 'CSV'
+  });
+  
+  var extracted_vector_same = img_compiled.sample({
+    region: same_ice_creams_vector,
+    scale: 10,
+  });
+  
+  Export.table.toDrive({
+    collection: extracted_vector_same, 
+    description: "Same_day_sensor_comparison_same_" + start_date, 
+    folder: 'Nantes/REWRITE', 
+    fileFormat: 'CSV'
+  });
+}

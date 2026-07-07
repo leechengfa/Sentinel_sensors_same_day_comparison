@@ -30,7 +30,7 @@ library(patchwork)
 This report explores the differences in classification output of the [ICE CREAMS model](https://github.com/BedeFfinian/ICE_CREAMS) on two images taken on the same day by Sentinel-2. 
 
 - 8 November 2025: Sentinel-2A and Sentinel-2B passed over Bourgneuf Bay within `r ceiling(13.11-1.49)` minutes of each other.
-- 22 February 2026: Sentinel-2A and Sentinel-2B passed over Ria de Aveiro within `r ceiling(16-15)` hour and `r ceiling(57.21-55.10)` minutes of each other.
+- 22 February 2026: Sentinel-2A and Sentinel-2B passed over Ria de Aveiro within `r ceiling(30.01-21.09)` minutes of each other.
 
 All analyses were performed in R version 4.5.2 [@Rversion].
 All work belong to the [REWRITE project](https://rewriteproject.eu/).
@@ -91,6 +91,9 @@ import_ICECREAMS_custom <- function(sensor, tile_name, date) {
   output <- rast(f)
     output$Out_Class <- output$Out_Class %>%
       classify(mat, include.lowest = TRUE)
+  
+  ## mask out areas where SPC < 20; still some data points in the dataset that reflects this
+  # output <- mask(output, output$Seagrass_Cover < 20)
     
   return(output)
 }
@@ -139,6 +142,10 @@ import_GEE_output <- function(tile_name, date) {
       group_by(system.index, agree, band) %>%
       mutate(sensor.diff = diff(value), id = paste(system.index, sensor, agree, sep = "_")) %>% ## S2B - S2A
       ungroup()
+    
+    ## identify rows where SPC for both S2A and S2B are 0, thus shouldn't even be seagrass pixels
+    output <- output %>%
+      mutate(QA = ifelse(spc_S2A + spc_S2B > 0, "keep", "remove"))
   
   return(output)
 }
@@ -147,6 +154,7 @@ calculate_gee_matchup <- function(dataframe) {
   # create a table of the class match up
   class.matchup <- dataframe %>%
     filter(sensor == 'S2B') %>% ## remove duplicate that resulted from pivot_longer()
+    filter(QA == "keep") %>% 
     select(class_S2A, class_S2B) %>%
     table() 
   
@@ -185,6 +193,8 @@ calculate_gee_matchup <- function(dataframe) {
 # Bourgneuf Bay (8 November 2025)
 
 The overlap in coverage is noted at Bourgneuf Bay. with about `r ceiling(13.11-1.49)` minutes, the light conditions are assumed to be the same. This is even as there are some difference in cloud cover and movement over the area of interest. For the purpose of comparison, the cloudy areas are removed from the analysis.
+
+An ex-colleague, Bringfried, suggested to consider their look angle. By extracting them from Google Earth Engine (please see this repo's [GEE script](https://github.com/leechengfa/Sentinel_sensors_same_day_comparison/blob/main/GEE_script)), the mean incidence zenith angles ranges from 2.89-3.59&deg; for this Sentinel-2A image and 9.97-10.15&deg; for the Sentinel-2B image.
 
 ```{r bourgneuf_map_preprocess}
 #| echo: false
@@ -300,6 +310,8 @@ table.class.matchup.BB <- calculate_gee_matchup(csv.sensor.BB)
 
 `r (table.class.matchup.BB['S2A: Magnoliopsida','S2B: Magnoliopsida']/sum(table.class.matchup.BB['S2A: Magnoliopsida',]) * 100) %>% format(digits = 3, nsmall = 1)`% and `r (table.class.matchup.BB['S2A: Magnoliopsida','S2B: Magnoliopsida']/sum(table.class.matchup.BB[,'S2B: Magnoliopsida']) * 100) %>% format(digits = 3, nsmall = 1)`% of the seagrass labels were in agreement for Sentinel-2A and 2B, respectively. Of the pixel labelled as seagrass in the Sentinel-2A image, `r (table.class.matchup.BB['S2A: Magnoliopsida','S2B: Phaeophyceae']/sum(table.class.matchup.BB['S2A: Magnoliopsida',]) * 100) %>% format(digits = 3, nsmall = 1)`% are labelled as Phaeophyceae, `r (table.class.matchup.BB['S2A: Magnoliopsida','S2B: Rhodophyta']/sum(table.class.matchup.BB['S2A: Magnoliopsida',]) * 100) %>% format(digits = 3, nsmall = 1)`% as Rhodophyta in the Sentinel-2B image, and `r (table.class.matchup.BB['S2A: Magnoliopsida','S2B: Water']/sum(table.class.matchup.BB['S2A: Magnoliopsida',]) * 100) %>% format(digits = 3, nsmall = 1)`% as water in the Sentinel-2B image. As for the Sentinel-2B image, `r (table.class.matchup.BB['S2A: Microphytobenthos','S2B: Magnoliopsida']/sum(table.class.matchup.BB[,'S2B: Magnoliopsida']) * 100) %>% format(digits = 3, nsmall = 1)`% of its seagrass labels were labelled as microphytobenthos and `r (table.class.matchup.BB['S2A: Phaeophyceae','S2B: Magnoliopsida']/sum(table.class.matchup.BB[,'S2B: Magnoliopsida']) * 100) %>% format(digits = 3, nsmall = 1)`% as Phaeophyceae in the Sentinel-S2A image. 
 
+Separately, a total of `r csv.sensor.BB %>% select(system.index, QA) %>% unique() %>% filter(QA == 'remove') %>% nrow()` points were removed, as the maps for both sensors predicted zero seagrass percent cover. As all these should have been labelled as a seagrass pixel by at least one of the sensors, this would be a contradiction and thus removed from analysis.
+
 ```{r gee_class_matchup_table_BB}
 #| echo: false
 #| error: false
@@ -313,7 +325,7 @@ knitr::kable(table.class.matchup.BB,
              )
 ```
 
-- The first class (Bare Sand) is missing from the Sentinel-2B classification.
+- The first class (Bare Sand) is missing from both classification outputs, after removing for pixels with zero seagrass cover.
 - There are more pixels identified as seagrass in the Sentinel-2B image. 
 - Even when the classification maps disagree on the label, individually they could have very high probability in their labels, as seen by the left skew. 
 
@@ -328,6 +340,7 @@ knitr::kable(table.class.matchup.BB,
 
 p_hist_agree_classProbS2A.BB <- csv.sensor.BB %>%
   filter(sensor == 'S2A') %>% # remove duplicate
+  filter(QA == 'keep') %>%
   ggplot(aes(x = classProb_S2A)) +
     geom_vline(xintercept = 0.5, colour = 'red', linetype = 2) +
     geom_histogram() +
@@ -337,6 +350,7 @@ p_hist_agree_classProbS2A.BB <- csv.sensor.BB %>%
 
 p_hist_agree_classProbS2B.BB <- csv.sensor.BB %>%
   filter(sensor == 'S2B') %>% # remove duplicate
+  filter(QA == 'keep') %>%
   ggplot(aes(x = classProb_S2B)) +
     geom_vline(xintercept = 0.5, colour = 'red', linetype = 2) +
     geom_histogram() +
@@ -347,21 +361,47 @@ p_hist_agree_classProbS2B.BB <- csv.sensor.BB %>%
 p_hist_agree_classProbS2A.BB / p_hist_agree_classProbS2B.BB
 ```
 
-ANALYSIS TO CHECK IF THE HIGH PROBABILITY IS matched with a high probability in the difference pixels (scatter plot; colours for non-seagrass, shape for S2A/S2B seagrass label)
+```{r gee_scatter_preprocess_BB}
+#| echo: false
+#| error: false
+#| message: false
+#| warning: false
+#| fig.width: 14
+#| fig.height: 8
+#| fig.cap: Scatter
 
-- to do:
-- massage data frame to suit a scatterplot --> filter for only diff; combine both classes and remove 4, keeping the other number; while noting whether S2A or S2B has the 4 or not
-- scatter based on the probability of S2A and S2B. 
-- check for patterns. 
+csv.sensor.scatter.BB <- csv.sensor.wide.BB %>%
+  filter(QA == 'keep') %>%  
+  filter(agree == 'diff') %>% 
+  select(-band, -wavelength, -sensor.diff, -S2A, -S2B) %>%
+  unique() %>%
+  mutate(class_scatter = ifelse(class_S2A != 4, class_S2A, ifelse(class_S2B != 4, class_S2B, NA)),
+         sensor_disagree = ifelse(class_S2A != 4, "S2A", ifelse(class_S2B != 4, "S2B", NA)))
+```
 
+Since the above figure shows that the class probabilities of the non-seagrass classification can be high in spite of the disagreement, it is hypothesised that the corresponding seagrass class probability from the other sensor could be lower in response, and conversely so for non-seagrass pixels with a low class probability. However, as seen in the figure below, pixels in disagreement could still receive high class probabilities for both seagrass and non-seagrass labels. 
 
+```{r gee_scatter_BB}
+#| echo: false
+#| error: false
+#| message: false
+#| warning: false
+#| fig.width: 14
+#| fig.height: 8
+#| fig.cap: Scatterplot of class probabilities of the ICE CREAMS classification map for the pixels in disagreement only on the Sentinel-2A and Sentinel-2B images. Only pixels with one seagrass label and one non-seagrass label were considered, regardless of the source of the seagrass label (i.e. Sentinel-2A or Sentinel-2B). This compares the uncertainty in classification between the maps derived from the two images. The numbers in the row headers denote the non-seagrass classes of the ICE CREAMS model. 
 
+csv.sensor.scatter.BB %>%
+  filter(spc_S2A + spc_S2B > 0) %>%
+  ggplot(aes(x = classProb_S2B, y = classProb_S2A, colour = sensor_disagree)) +
+  xlab('Class Probability: Sentinel-2B') + ylab('Class Probability: Sentinel-2A') + 
+  scale_colour_viridis_d("Sensor which\nclassifies as\nnon-seagrass", option = "F", begin = 0.3, end = 0.80) +
+  geom_point(position = position_dodge()) + 
+  facet_grid(class_scatter ~ sensor_disagree)
+```
 
 ### Seagrass percent cover
 
-When comparing the seagrass percent cover, based on the more positive kurtosis seen in the distribution for the Sentinel-2A classification map, it seems that more seagrass pixels with a lower seagrass cover (< ~ 35%) might have been labelled differently in the other image. This kurtosis pattern is not present for the distribution of pixels in disagreement from the Sentinel-2B classification map.
-
-UPDATE THIS
+The seagrass percent cover distribution shows a more normal distribution, with the mode at around 30-40% for the different treatments. 
 
 ```{r gee_spc_BB}
 #| echo: false
@@ -372,6 +412,7 @@ UPDATE THIS
 
 p_hist_agree_spcS2A.BB <- csv.sensor.BB %>%
   filter(sensor == 'S2A') %>% # remove duplicate
+  filter(QA == 'keep') %>%
   filter(class_S2A == 4) %>%
   filter(spc_S2A > 0) %>%
   ggplot(aes(x = spc_S2A)) +
@@ -383,6 +424,7 @@ p_hist_agree_spcS2A.BB <- csv.sensor.BB %>%
 
 p_hist_agree_spcS2B.BB <- csv.sensor.BB %>%
   filter(sensor == 'S2B') %>% # remove duplicate
+  filter(QA == 'keep') %>%
   filter(class_S2B == 4) %>%
   filter(spc_S2B > 0) %>%
   ggplot(aes(x = spc_S2B)) +
@@ -406,7 +448,9 @@ p_hist_agree.BB &
 
 Indeed, while the pixels that disagree show a larger range of spectral differences, by and large, their range of values and interquartile ranges are still very similar (no statistical tests performed).
 
-Most importantly, there seems to be a substantial difference in B2 values between both images. For this difference plot, there seems to be a longer tail for both the boxplot and violin plots for pixels in disagreement versus pixels in agreement, as well as a possible red shift (no statistical tests performed).
+Most importantly, there seems to be a substantial difference in B1 and B2 values between both images, and slight differences in B6, B8 and B8A values. For this difference plot, there seems to be a longer tail for both the boxplot and violin plots for pixels in disagreement versus pixels in agreement, as well as a possible red shift (no statistical tests performed).
+
+While there might be clouds and cloud shadows in the larger image, for these points, they should be sampled from clear pixels, and thus not affected by it. 
 
 ```{r gee_boxplot_BB, fig.cap = "Boxplot and violin plot showing the difference in band values between the two images for the pixels in agreement and disagreement of the seagrass classification."}
 #| echo: false
@@ -418,6 +462,7 @@ Most importantly, there seems to be a substantial difference in B2 values betwee
 
 p_box.BB <- csv.sensor.BB %>%
   filter(sensor == 'S2A') %>% # only one needed, the other is a dupe
+  filter(QA == 'keep') %>%
   filter(wavelength < 1000) %>%
   ggplot(aes(x = band, y = sensor.diff/10000, colour = agree)) +
     geom_violin(aes(fill = agree)) +
@@ -439,7 +484,9 @@ The match ups suggest that the pixel values of these two platforms are highly si
 #| fig.width: 12
 #| fig.height: 8
 
-p_matchup.BB <- ggplot(csv.sensor.wide.BB, aes(x = S2A, y = S2B)) +
+p_matchup.BB <- csv.sensor.wide.BB %>%
+  filter(QA == 'keep') %>% 
+  ggplot(aes(x = S2A, y = S2B)) +
   geom_smooth(aes(colour = agree)) + 
   geom_point(aes(colour = agree)) +
   scale_colour_viridis_d('Agreement', option = 'H') +
@@ -461,11 +508,12 @@ Finally, a subset of pixel spectral values are inspected for their spectral shap
 #| fig.height: 12
 
 p_shape1.BB <- csv.sensor.BB %>%
-    filter(grp == 10) %>%
-    filter(wavelength < 1000) %>%
-    ggplot(aes(x = wavelength, y = value, group = id, colour = sensor)) +
-    geom_line(linewidth = 1) +
-    facet_wrap(agree + system.index ~ ., scales = 'fixed')
+  filter(QA == 'keep') %>% 
+  filter(grp == 10) %>%
+  filter(wavelength < 1000) %>%
+  ggplot(aes(x = wavelength, y = value, group = id, colour = sensor)) +
+  geom_line(linewidth = 1) +
+  facet_wrap(agree + system.index ~ ., scales = 'fixed')
 
 p_shape1.BB
 ```
@@ -479,11 +527,12 @@ p_shape1.BB
 #| fig.height: 12
 
 p_shape2.BB <- csv.sensor.BB %>%
-    filter(grp == 100) %>%
-    filter(wavelength < 1000) %>%
-    ggplot(aes(x = wavelength, y = value, group = id, colour = sensor)) +
-    geom_line(linewidth = 1) +
-    facet_wrap(agree + system.index ~ ., scales = 'fixed')
+  filter(QA == 'keep') %>% 
+  filter(grp == 100) %>%
+  filter(wavelength < 1000) %>%
+  ggplot(aes(x = wavelength, y = value, group = id, colour = sensor)) +
+  geom_line(linewidth = 1) +
+  facet_wrap(agree + system.index ~ ., scales = 'fixed')
 
 p_shape2.BB
 ```
@@ -497,18 +546,21 @@ p_shape2.BB
 #| fig.height: 12
 
 p_shape3.BB <- csv.sensor.BB %>%
-    filter(grp == 500) %>%
-    filter(wavelength < 500) %>%
-    ggplot(aes(x = wavelength, y = value, group = id, colour = sensor)) +
-    geom_line(linewidth = 1) +
-    facet_wrap(agree + system.index ~ ., scales = 'fixed')
+  filter(QA == 'keep') %>% 
+  filter(grp == 300) %>%
+  filter(wavelength < 500) %>%
+  ggplot(aes(x = wavelength, y = value, group = id, colour = sensor)) +
+  geom_line(linewidth = 1) +
+  facet_wrap(agree + system.index ~ ., scales = 'fixed')
 
 p_shape3.BB
 ```
 
 # Ria de Aveiro (22 February 2026)
 
-The overlap in coverage is noted at Ria de Aveiro. with about `r ceiling(16-15)` hour and `r ceiling(57.21-55.10)` minutes of difference and no clouds, the light conditions are assumed to be the same.
+The overlap in coverage is noted at Ria de Aveiro. with about `r ceiling(30.01-21.09)` minutes of difference and no clouds, the light conditions are assumed to be the same.
+
+The mean incidence zenith angles ranges from 5.78-6.17&deg; for this Sentinel-2A image and 5.80-6.17&deg; for the Sentinel-2B image.
 
 ```{r aveiro_map_preprocess}
 #| echo: false
@@ -631,6 +683,8 @@ table.class.matchup.AV <- calculate_gee_matchup(csv.sensor.AV)
 
 `r (table.class.matchup.AV['S2A: Magnoliopsida','S2B: Magnoliopsida']/sum(table.class.matchup.AV['S2A: Magnoliopsida',]) * 100) %>% format(digits = 3, nsmall = 1)`% and `r (table.class.matchup.AV['S2A: Magnoliopsida','S2B: Magnoliopsida']/sum(table.class.matchup.AV[,'S2B: Magnoliopsida']) * 100) %>% format(digits = 3, nsmall = 1)`% of the seagrass labels were in agreement for Sentinel-2A and 2B, respectively. Of the pixel labelled as seagrass in the Sentinel-2A image, `r (table.class.matchup.AV['S2A: Magnoliopsida','S2B: Bare Sediment']/sum(table.class.matchup.AV['S2A: Magnoliopsida',]) * 100) %>% format(digits = 3, nsmall = 1)`% are labelled as bare sediment and `r (table.class.matchup.AV['S2A: Magnoliopsida','S2B: Rhodophyta']/sum(table.class.matchup.AV['S2A: Magnoliopsida',]) * 100) %>% format(digits = 3, nsmall = 1)`% as Rhodophyta in the Sentinel-2B image. As for the Sentinel-2B image, `r (table.class.matchup.AV['S2A: Bare Sediment','S2B: Magnoliopsida']/sum(table.class.matchup.AV[,'S2B: Magnoliopsida']) * 100) %>% format(digits = 3, nsmall = 1)`% of its seagrass labels were labelled as bare sediment and `r (table.class.matchup.AV['S2A: Rhodophyta','S2B: Magnoliopsida']/sum(table.class.matchup.AV[,'S2B: Magnoliopsida']) * 100) %>% format(digits = 3, nsmall = 1)`% as Rhodophyta in the Sentinel-S2A image. While it seems intuitive to suggest that Sentinel-2A is overestimating, it is also possible that Sentinel-2B might be underestimating.
 
+Separately, a total of `r csv.sensor.BB %>% select(system.index, QA) %>% unique() %>% filter(QA == 'remove') %>% nrow()` points were removed, as the maps for both sensors predicted zero seagrass percent cover. As all these should have been labelled as a seagrass pixel by at least one of the sensors, this would be a contradiction and thus removed from analysis.
+
 ```{r gee_class_matchup_table_AV}
 #| echo: false
 #| error: false
@@ -659,6 +713,7 @@ Correspondingly, many pixels with the Bare Sediment and Rhodophyta classificatio
 
 p_hist_agree_classProbS2A.AV <- csv.sensor.AV %>%
   filter(sensor == 'S2A') %>% # remove duplicate
+  filter(QA == 'keep') %>% 
   ggplot(aes(x = classProb_S2A)) +
     geom_vline(xintercept = 0.5, colour = 'red', linetype = 2) +
     geom_histogram() +
@@ -668,6 +723,7 @@ p_hist_agree_classProbS2A.AV <- csv.sensor.AV %>%
 
 p_hist_agree_classProbS2B.AV <- csv.sensor.AV %>%
   filter(sensor == 'S2B') %>% # remove duplicate
+  filter(QA == 'keep') %>% 
   ggplot(aes(x = classProb_S2B)) +
     geom_vline(xintercept = 0.5, colour = 'red', linetype = 2) +
     geom_histogram() +
@@ -676,6 +732,44 @@ p_hist_agree_classProbS2B.AV <- csv.sensor.AV %>%
     facet_grid(agree ~ class_S2B, labeller = labeller(agree = c(diff = 'Disagreement on\nseagrass label', same = 'Agreement on\nseagrass label')))
 
 p_hist_agree_classProbS2A.AV / p_hist_agree_classProbS2B.AV
+```
+
+```{r gee_scatter_preprocess_AV}
+#| echo: false
+#| error: false
+#| message: false
+#| warning: false
+#| fig.width: 14
+#| fig.height: 8
+#| fig.cap: Scatter
+
+csv.sensor.scatter.AV <- csv.sensor.wide.AV %>%
+  filter(QA == 'keep') %>%  
+  filter(agree == 'diff') %>% 
+  select(-band, -wavelength, -sensor.diff, -S2A, -S2B) %>%
+  unique() %>%
+  mutate(class_scatter = ifelse(class_S2A != 4, class_S2A, ifelse(class_S2B != 4, class_S2B, NA)),
+         sensor_disagree = ifelse(class_S2A != 4, "S2A", ifelse(class_S2B != 4, "S2B", NA)))
+```
+
+Since the above figure shows that the class probabilities of the non-seagrass classification can be high in spite of the disagreement, it is hypothesised that the corresponding seagrass class probability from the other sensor could be lower in response, and conversely so for non-seagrass pixels with a low class probability. However, as seen in the figure below, pixels in disagreement could still receive high class probabilities for both seagrass and non-seagrass labels. 
+
+```{r gee_scatter_AV}
+#| echo: false
+#| error: false
+#| message: false
+#| warning: false
+#| fig.width: 14
+#| fig.height: 8
+#| fig.cap: Scatterplot of class probabilities of the ICE CREAMS classification map for the pixels in disagreement only on the Sentinel-2A and Sentinel-2B images. Only pixels with one seagrass label and one non-seagrass label were considered, regardless of the source of the seagrass label (i.e. Sentinel-2A or Sentinel-2B). This compares the uncertainty in classification between the maps derived from the two images. The numbers in the row headers denote the non-seagrass classes of the ICE CREAMS model. 
+
+csv.sensor.scatter.AV %>%
+  filter(spc_S2A + spc_S2B > 0) %>%
+  ggplot(aes(x = classProb_S2B, y = classProb_S2A, colour = sensor_disagree)) +
+  xlab('Class Probability: Sentinel-2B') + ylab('Class Probability: Sentinel-2A') + 
+  scale_colour_viridis_d("Sensor which\nclassifies as\nnon-seagrass", option = "F", begin = 0.3, end = 0.80) +
+  geom_point(position = position_dodge()) + 
+  facet_grid(class_scatter ~ sensor_disagree)
 ```
 
 ### Seagrass percent cover
@@ -691,6 +785,7 @@ When comparing the seagrass percent cover, based on the more positive kurtosis s
 
 p_hist_agree_spcS2A.AV <- csv.sensor.AV %>%
   filter(sensor == 'S2A') %>% # remove duplicate
+  filter(QA == 'keep') %>% 
   filter(class_S2A == 4) %>%
   filter(spc_S2A > 0) %>%
   ggplot(aes(x = spc_S2A)) +
@@ -702,6 +797,7 @@ p_hist_agree_spcS2A.AV <- csv.sensor.AV %>%
 
 p_hist_agree_spcS2B.AV <- csv.sensor.AV %>%
   filter(sensor == 'S2B') %>% # remove duplicate
+  filter(QA == 'keep') %>% 
   filter(class_S2B == 4) %>%
   filter(spc_S2B > 0) %>%
   ggplot(aes(x = spc_S2B)) +
@@ -740,6 +836,7 @@ Most importantly, there seems to be a substantial difference in B2 values betwee
 
 p_box.AV <- csv.sensor.AV %>%
   filter(sensor == 'S2A') %>% # only one needed, the other is a dupe
+  filter(QA == 'keep') %>% 
   filter(wavelength < 1000) %>%
   ggplot(aes(x = band, y = sensor.diff/10000, colour = agree)) +
     geom_violin(aes(fill = agree)) +
@@ -761,7 +858,9 @@ The match ups suggest that the pixel values of these two platforms are highly si
 #| fig.width: 12
 #| fig.height: 8
 
-p_matchup.AV <- ggplot(csv.sensor.wide.AV, aes(x = S2A, y = S2B)) +
+p_matchup.AV <- csv.sensor.wide.AV %>%
+  filter(QA == 'keep') %>%  
+  ggplot(aes(x = S2A, y = S2B)) +
   geom_smooth(aes(colour = agree)) + 
   geom_point(aes(colour = agree)) +
   scale_colour_viridis_d('Agreement', option = 'H') +
@@ -783,11 +882,12 @@ Finally, a subset of pixel spectral values are inspected for their spectral shap
 #| fig.height: 12
 
 p_shape1.AV <- csv.sensor.AV %>%
-    filter(grp == 10) %>%
-    filter(wavelength < 1000) %>%
-    ggplot(aes(x = wavelength, y = value, group = id, colour = sensor)) +
-    geom_line(linewidth = 1) +
-    facet_wrap(agree + system.index ~ ., scales = 'fixed')
+  filter(QA == 'keep') %>%  
+  filter(grp == 10) %>%
+  filter(wavelength < 1000) %>%
+  ggplot(aes(x = wavelength, y = value, group = id, colour = sensor)) +
+  geom_line(linewidth = 1) +
+  facet_wrap(agree + system.index ~ ., scales = 'fixed')
 
 p_shape1.AV
 ```
@@ -801,11 +901,12 @@ p_shape1.AV
 #| fig.height: 12
 
 p_shape2.AV <- csv.sensor.AV %>%
-    filter(grp == 100) %>%
-    filter(wavelength < 1000) %>%
-    ggplot(aes(x = wavelength, y = value, group = id, colour = sensor)) +
-    geom_line(linewidth = 1) +
-    facet_wrap(agree + system.index ~ ., scales = 'fixed')
+  filter(QA == 'keep') %>%  
+  filter(grp == 100) %>%
+  filter(wavelength < 1000) %>%
+  ggplot(aes(x = wavelength, y = value, group = id, colour = sensor)) +
+  geom_line(linewidth = 1) +
+  facet_wrap(agree + system.index ~ ., scales = 'fixed')
 
 p_shape2.AV
 ```
@@ -819,11 +920,12 @@ p_shape2.AV
 #| fig.height: 12
 
 p_shape3.AV <- csv.sensor.AV %>%
-    filter(grp == 1000) %>%
-    filter(wavelength < 1000) %>%
-    ggplot(aes(x = wavelength, y = value, group = id, colour = sensor)) +
-    geom_line(linewidth = 1) +
-    facet_wrap(agree + system.index ~ ., scales = 'fixed')
+  filter(QA == 'keep') %>%  
+  filter(grp == 500) %>%
+  filter(wavelength < 1000) %>%
+  ggplot(aes(x = wavelength, y = value, group = id, colour = sensor)) +
+  geom_line(linewidth = 1) +
+  facet_wrap(agree + system.index ~ ., scales = 'fixed')
 
 p_shape3.AV
 ```

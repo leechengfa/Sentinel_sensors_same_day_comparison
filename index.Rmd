@@ -230,7 +230,7 @@ p_S2B.BB <- ggplot() +
 p_S2A.BB + p_S2B.BB
 ```
 
-## ICE CREAMS model
+  ## ICE CREAMS model
 
 Given such similar reflectance, one would assume that the ICE CREAMS classification would be highly similar. However, there are some differences.
 
